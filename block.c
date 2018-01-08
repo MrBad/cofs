@@ -1,9 +1,17 @@
+/**
+ *  Blocks, rocks and the bits
+ *
+ *  This file will handle the low level allocation of blocks.
+ *  A block is a group of bytes on disk and right now it has a length of 512,
+ *  defined by COFS_BLOCK_SIZE
+ *
+ */
 #include <linux/buffer_head.h>
 #include "cofs_common.h"
 #include "inode.h"
 
 /*
- * Zeroes a phisical block on disk
+ * Zero/erase a physical block on disk
  */
 static void cofs_block_bzero(struct super_block *sb, unsigned int block_no)
 {
@@ -14,24 +22,24 @@ static void cofs_block_bzero(struct super_block *sb, unsigned int block_no)
 }
 
 /**
- * Finds a free block of COFS_BLOCK_SIZE on disk
+ * Finds a free block on disk
  * marks it as active and returns it's physical address
  * On failure, returns 0, which is not a valid block
  */
-unsigned int cofs_block_alloc(struct super_block *sb)
+static unsigned int cofs_block_alloc(struct super_block *sb)
 {
     struct buffer_head *bh;
-    unsigned int block, scan, idx, mask, iter = 0;
+    unsigned int block, scan, idx, mask;
     cofs_superblock_t *cofs_sb = (cofs_superblock_t *) sb->s_fs_info;
     for (block = 0; block < cofs_sb->size; block += BITS_PER_BLOCK) {
         bh = sb_bread(sb, BITMAP_BLOCK(block, cofs_sb));
-        for (scan = 0; scan < COFS_BLOCK_SIZE / sizeof(int); scan++, iter++) {
+        for (scan = 0; scan < COFS_BLOCK_SIZE / sizeof(int); scan++) {
             if (((unsigned int *) bh->b_data)[scan] != 0xFFFFFFFF) {
                 break;
             }
         }
         if (scan != COFS_BLOCK_SIZE / sizeof(int)) {
-            for (idx = scan * 32; idx < (scan + 1)*32; idx++, iter++) {
+            for (idx = scan * 32; idx < (scan + 1) * 32; idx++) {
                 mask = 1 << (idx % 8);
                 if((bh->b_data[idx / 8] & mask) == 0) {
                     bh->b_data[idx / 8] |= mask;
@@ -44,12 +52,21 @@ unsigned int cofs_block_alloc(struct super_block *sb)
         }
         brelse(bh);
     }
-    printk("Cannot find any free block\n");
+    printk("Cannot find any free block, out of space?!\n");
     return 0;
 }
 
 /**
- * We cannot use iput here, because it does not handle the addrs
+ * Returning the real disk block number, by giving relative block of inode.
+ * Eg. block 1 of inode, that represents bytes from 512-1024 will be 
+ * mapped to disk block 3059 (supposing).
+ * If we try to write ouside, in an analocated block, a new free block will
+ * be mapped in. Usually the read functions will not read ouside the inode size.
+ * Maybe a new guard will be added - like bool extend, and only extending on 
+ * write functions.
+ * We will not flush the inode buffer, because on some linux errors when 
+ * marking it dirty, twice. The function that calls this one and modify the inode
+ * will be the write function, which also alter and mark the inode buffer as dirty
  */
 unsigned int cofs_get_real_block(struct inode *inode, unsigned int ino_block)
 {
@@ -58,44 +75,74 @@ unsigned int cofs_get_real_block(struct inode *inode, unsigned int ino_block)
                        *buf;            // generic buffer for other manipulations
  
     cofs_inode_t *dino = cofs_raw_inode(sb, inode->i_ino, ino_buf);
-    unsigned int block_no = 0, // block alocated or 0 on error
-                 sidx,  // single indirect index 
-                 //didx,  // double indirect index
+    unsigned int block_no = 0,  // block alocated or 0 on error
+                 rel_b,         // relative block number inside a table
+                 pblock,
+                 sidx,          // single indirect index 
+                 didx,          // double indirect index
                  *blocks;
 
+    // direct alocation //
     if (ino_block < NUM_DIRECT) { 
         if (dino->addrs[ino_block] == 0) {
-            dino->addrs[ino_block] = cofs_block_alloc(sb); // alocate direct data block
-            //mark_buffer_dirty(ino_buf);           // dino is a pointer in ino_block data ;)
-            printk("alocated block no: %d\n", block_no);
+            // alocate direct data block
+            dino->addrs[ino_block] = cofs_block_alloc(sb); 
         }
         block_no = dino->addrs[ino_block];
     } 
+    // single indirect allocation //
     else if (ino_block < NUM_DIRECT + NUM_SIND) {
         if (dino->addrs[SIND_IDX] == 0) {
-            dino->addrs[SIND_IDX] = cofs_block_alloc(sb); // alocate block for indirect table
-            printk("allocating indirect table block\n");
-            //mark_buffer_dirty(ino_buf);
+            // alocate block for indirect table
+            dino->addrs[SIND_IDX] = cofs_block_alloc(sb); 
         }
-        buf = sb_bread(sb, dino->addrs[SIND_IDX]);       // load indirect table
+        buf = sb_bread(sb, dino->addrs[SIND_IDX]); // load indirect table
         blocks = (unsigned int *) buf->b_data;
         sidx = ino_block - NUM_DIRECT;
         if (blocks[sidx] == 0) {
-            blocks[sidx] = cofs_block_alloc(sb);     // alocate block for data
-            //mark_buffer_dirty(buf);
+            // alocate block for data
+            blocks[sidx] = cofs_block_alloc(sb);
+            mark_buffer_dirty(buf);
         }
         block_no = blocks[sidx];
         brelse(buf);
     }
+    // double indirect allocation //
     else if (ino_block < MAX_FILE_SIZE) {
-        printk("Double indirect not available");
+        rel_b = ino_block - NUM_DIRECT - NUM_SIND; // block relative number to this zone
+        // index into the first level table //
+        sidx = ino_block / NUM_EINB;
+        // index into the second level table //
+        didx = ino_block % NUM_EINB;
+
+        if (dino->addrs[DIND_IDX] == 0) {
+            // allocating a block for primary indirect table //
+            dino->addrs[DIND_IDX] = cofs_block_alloc(sb);
+        }
+        buf = sb_bread(sb, dino->addrs[DIND_IDX]);
+        blocks = (unsigned int *) buf->b_data;
+        if (blocks[sidx] == 0) {
+            // allocating a block for secondary indirect table //
+            blocks[sidx] = cofs_block_alloc(sb);
+            mark_buffer_dirty(buf);
+        }
+        pblock = blocks[sidx];
+        brelse(buf);
+
+        buf = sb_bread(sb, pblock);
+        blocks = (unsigned int *) buf->b_data;
+        if (blocks[didx] == 0) {
+            // finally alocating the data block //
+            blocks[didx] = cofs_block_alloc(sb);
+            mark_buffer_dirty(buf);
+        }
+        block_no = blocks[didx];
+        brelse(buf);
     }
     else {
-        printk("Requested relative inode block out of MAX_FILE_SIZE %u\n", ino_block);
+        pr_err("Inode's relative block is out of MAX_FILE_SIZE - block: %u, max: %lu\n", ino_block, MAX_FILE_SIZE);
     }
     
     brelse(ino_buf);
-    //printk("cofs_get_real_block: inode: %lu, relative: %u, block_no: %u\n", 
-    //       inode->i_ino, ino_block, block_no);
     return block_no;
 }

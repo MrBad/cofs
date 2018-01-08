@@ -12,15 +12,15 @@ to unmount and clean all, type 'make clean'.
 // the cofs (disk) super block //
 typedef struct cofs_superblock
 {
-    unsigned int magic;
-    unsigned int size;              // total size of fs, in blocks
-    unsigned int num_blocks;        // number of data blocks
-    unsigned int num_inodes;        // number of inodes
-    unsigned int bitmap_start;      // where free bitmap starts, in blocks
-    unsigned int inode_start;       // where inodes starts, in blocks
-                                    // TODO: add where data blocks starts
-                                    // so we ensure we never allocate blocks
-                                    // in bitmap or inoode zone
+    unsigned int magic;         // magic number of cofs - COFS_MAGIC
+    unsigned int size;          // total size of fs, in blocks
+    unsigned int num_blocks;    // number of data blocks, const, (size - meta)
+    unsigned int num_inodes;    // number of inodes
+    unsigned int bitmap_start;  // where free bitmap starts, in blocks
+    unsigned int inode_start;   // where inodes starts, in blocks
+                                // TODO: add where data blocks starts
+                                // so we ensure we never allocate blocks
+                                // in bitmap or inoode zone
 } cofs_superblock_t;
 
 
@@ -74,5 +74,25 @@ Next NUM_SIND blocks are stored in an indirect table, which block number is loca
 The rest of the file, until MAX_FILE_SIZE blocks are stored in double indirect table. 
 With 512 bytes per COFS_BLOCK_SIZE, MAX_FILE_SIZE will be (NUM_DIRECT + NUM_SIND + NUM_DIND) * 512
 6 + 128 + 128*128 * 512 / 1024 ~ 8MB, enough for now :)
+(8457216 bytes more exactly, or 16518 blocks)
 
+// a 'picture' for block data allocations
 
+inode->addrs[0] -> DATA BLOCK - bytes from 0 -> COFS_BLOCK_SIZE-1
+inode->addrs[1] -> DATA BLOCK - bytes from COFS_BLOCK_SIZE -> 2 *COFS_BLOCK_SIZE-1
+...
+inode->addrs[NUM_DIRECT-1]  -> DATA BLOCK
+
+                               | -> DATA BLOCK
+inode[SIND_IDX] -> MAIN TABLE  | -> DATA BLOCK
+                               | -> DATA BLOCK
+
+                                                 | -> DATA BLOCK
+inode[DIND_IDX] -> MAIN TABLE  | -> SECOND TABLE | ...
+                               |                 | -> DATA BLOCK
+                               |                 | -> DATA BLOCK
+                               |
+                               | ...
+                               | -> SECOND TABLE | -> DATA BLOCK
+                                                 | ...
+                                                 | -> DATA BLOCK

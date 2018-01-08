@@ -35,6 +35,7 @@ typedef struct cofs_superblock
 #define NUM_DIRECT  6                           // number of direct blocks in the inode
 #define NUM_SIND    (COFS_BLOCK_SIZE / sizeof(int))  // number of single indirect blocks
 #define NUM_DIND    (NUM_SIND * NUM_SIND)       // number of double indidrect blocks
+#define NUM_EINB    (COFS_BLOCK_SIZE / sizeof(int)) // number of block entries in a block
 
 // max file size in blocks ~ 8 MB if COFS_BLOCK_SIZE == 512
 #define MAX_FILE_SIZE (NUM_DIRECT + NUM_SIND + NUM_DIND)
@@ -73,11 +74,11 @@ typedef struct cofs_inode {
 // block of bitmap containing bit for block b //
 #define BITMAP_BLOCK(block, superblock) (block / BITS_PER_BLOCK + superblock->bitmap_start)
 
-#define COFS_FILE_MAX_LEN 28
+#define COFS_FILE_NAME_MAX_LEN 28
 // a structure that describe a filename in a directory
 struct cofs_dirent {
     unsigned int d_ino;
-    char d_name[COFS_FILE_MAX_LEN];
+    char d_name[COFS_FILE_NAME_MAX_LEN];
 };
 
 #ifndef cofs_min

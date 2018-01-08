@@ -1,0 +1,6 @@
++ fix double indirect
++ add number of links / increment on linking
+- add unlink and truncate and free blocks
+- fix files mode
+- add triple indirect tables, so we break the 8MB limit of the file
+

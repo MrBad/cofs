@@ -45,7 +45,7 @@ ssize_t cofs_file_write(struct file *file, const char *buffer, size_t max, loff_
     struct buffer_head *bh;
     struct inode *inode = file_inode(file);
     
-    printk("cofs_file_write - inode: %lu, offset: %llu, max: %lu\n", 
+    pr_debug("cofs_file_write - inode: %lu, offset: %llu, max: %lu\n", 
             inode->i_ino, *offset, max);
    
     if (*offset > inode->i_size) {
@@ -60,7 +60,7 @@ ssize_t cofs_file_write(struct file *file, const char *buffer, size_t max, loff_
             pr_debug("cofs_get_real_block returned 0\n");
             return -1;
         }
-        printk("cofs-write inode: %lu, relative_block: %llu, block_no:%u\n", 
+        pr_debug("cofs-write inode: %lu, relative_block: %llu, block_no:%u\n", 
                 inode->i_ino, *offset/COFS_BLOCK_SIZE, block_no);
         num_bytes = cofs_min(max - total, COFS_BLOCK_SIZE - *offset % COFS_BLOCK_SIZE);
         bh = sb_bread(inode->i_sb, block_no);
@@ -71,7 +71,7 @@ ssize_t cofs_file_write(struct file *file, const char *buffer, size_t max, loff_
         brelse(bh);
     }
     if (max > 0 && *offset > inode->i_size) {
-        printk("Update inode size: inode: %lu, size: %llu, new_size: %llu\n",
+        pr_debug("Update inode size: inode: %lu, size: %llu, new_size: %llu\n",
                 inode->i_ino, inode->i_size, *offset);
         inode->i_size = *offset;
         cofs_iput(inode);
