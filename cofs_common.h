@@ -5,9 +5,9 @@
 #define COFS_BLOCK_SIZE 512
 #endif
 
-#define COFS_MAGIC 0xC0517155       // cosiris FS magic number
+#define COFS_MAGIC 0xC0517155       /* cosiris FS magic number */
 
-// SuperBlock
+/* SuperBlock */
 typedef struct cofs_superblock
 {
     unsigned int magic;
@@ -16,7 +16,7 @@ typedef struct cofs_superblock
     unsigned int num_inodes;        // number of inodes
     unsigned int bitmap_start;      // where free bitmap starts
     unsigned int inode_start;       // where inodes starts
-                                    // TODO: add where data blocks starts
+    unsigned int data_block;        // TODO: add where data blocks starts
                                     // so we ensure we never allocate blocks
                                     // in bitmap or inoode zone
 } cofs_superblock_t;
@@ -83,6 +83,14 @@ struct cofs_dirent {
 
 #ifndef cofs_min
     #define cofs_min(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+#ifndef FS_DIRECTORY
+    #define FS_DIRECTORY    0040000
+#endif
+
+#ifndef FS_FILE
+    #define FS_FILE         0100000
 #endif
 
 #endif // _COFS_COMMON_H

@@ -56,6 +56,40 @@ static unsigned int cofs_block_alloc(struct super_block *sb)
     return 0;
 }
 
+int cofs_block_free(struct super_block *sb, unsigned int block)
+{
+    struct buffer_head *bh;
+    unsigned int bitmap_block, idx, mask;
+    bitmap_block = BITMAP_BLOCK(block, ((cofs_superblock_t *) sb->s_fs_info));
+    bh = sb_bread(sb, bitmap_block);
+    idx = block % BITS_PER_BLOCK;
+    mask = 1 << (idx % 8);
+    if((bh->b_data[idx / 8] & mask) == 0) {
+        pr_err("Block %u allready free", block);
+        return -1;
+    }
+    pr_debug("Freeing block %u\n", block);
+    bh->b_data[idx / 8] &= ~mask;
+    mark_buffer_dirty(bh);
+    brelse(bh);
+    return 0;
+}
+
+int cofs_scan_block(struct super_block *sb, unsigned int block) 
+{
+    struct buffer_head *bh;
+    unsigned int scan, i = 0;
+    bh = sb_bread(sb, block);
+    for(scan = 0; scan < BLOCK_SIZE / sizeof(int); scan++) {
+        if(((uint32_t *)bh->b_data)[scan] != 0) {
+            i++;
+        }
+    }
+    brelse(bh);
+
+    return i;
+}
+
 /**
  * Returning the real disk block number, by giving relative block of inode.
  * Eg. block 1 of inode, that represents bytes from 512-1024 will be 

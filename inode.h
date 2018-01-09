@@ -10,4 +10,6 @@ void cofs_iput(struct inode *inode);
 
 struct inode *cofs_inode_alloc(struct super_block *sb, unsigned short int type);
 
+void cofs_inode_evict(struct inode *inode);
+
 #endif

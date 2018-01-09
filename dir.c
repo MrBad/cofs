@@ -35,16 +35,17 @@ static int cofs_readdir(struct file *file, struct dir_context *ctx)
 }
 
 /**
- * This file is called when kernel is resolving a path. dir is the inode of the parent
+ * This file is called when kernel is resolving a path. 
+ * dir is the inode of the parent, in dentry we find the name is looking for
  * It is querying the parent inode and check for the file name in dentry.
- * If it founds one, it populates it's inode number
+ * If it founds one, it populates it's inode by calling d_add
  */
 struct dentry *cofs_lookup(struct inode *dir, struct dentry *dentry, 
         unsigned int what)
 {
     struct buffer_head *bh;
     unsigned int num_blocks, block, block_no;
-    struct inode *file_inode;
+    struct inode *inode;
     struct cofs_dirent *cdir;
     
     num_blocks = dir->i_size / COFS_BLOCK_SIZE;
@@ -58,8 +59,8 @@ struct dentry *cofs_lookup(struct inode *dir, struct dentry *dentry,
         while (cdir < (struct cofs_dirent *) (bh->b_data + COFS_BLOCK_SIZE)) {
             if(cdir->d_ino != 0) {
                 if(!strncmp(cdir->d_name, dentry->d_name.name, COFS_FILE_NAME_MAX_LEN)) {
-                    file_inode = cofs_iget(dir->i_sb, cdir->d_ino);
-                    d_add(dentry, file_inode);
+                    inode = cofs_iget(dir->i_sb, cdir->d_ino);
+                    d_add(dentry, inode);
                     return NULL;
                 }
             }
@@ -136,7 +137,8 @@ static int cofs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, de
     }
     cofs_dir_link(dir, inode->i_ino, dentry->d_name.name); // self link to parent
 
-    pr_debug("cofs: mknod %s, mode: %d\n", dentry->d_name.name, mode);
+    pr_debug("cofs: mknod %s, inode: %lu, mode: %d\n", 
+            dentry->d_name.name, inode->i_ino, mode);
     return 0;
 }
 
@@ -154,20 +156,69 @@ static int cofs_create(struct inode *dir, struct dentry *dentry, umode_t mode, b
     return cofs_mknod(dir, dentry, mode | S_IFREG, 0);
 }
 
+static int cofs_unlink(struct inode *dir, struct dentry *dentry)
+{
+    struct buffer_head *bh;
+    unsigned int num_blocks, block, block_no;
+    struct cofs_dirent *cdir;
+
+    pr_debug("cofs_unlink called for: parent inode: %lu, name: %s, ino: %lu\n",
+            dir->i_ino, dentry->d_name.name, dentry->d_inode->i_ino);
+    
+    num_blocks = dir->i_size / COFS_BLOCK_SIZE;
+    for (block = 0; block < num_blocks; block++) {
+        if (!(block_no = cofs_get_real_block(dir, block))) {
+            pr_err("cofs_unlink: invalid block %u, inode %lu\n", 
+                    block, dir->i_ino);
+            return -1;
+        }
+        bh = sb_bread(dir->i_sb, block_no);
+        cdir = (struct cofs_dirent *) bh->b_data;
+        while (cdir < (struct cofs_dirent *) (bh->b_data + COFS_BLOCK_SIZE)) {
+            if (cdir->d_ino == dentry->d_inode->i_ino) {
+                pr_debug("cofs_unlink: inode %u, name: %s, n_links: %u\n", 
+                        cdir->d_ino, cdir->d_name, dentry->d_inode->i_nlink);
+                memset(cdir, 0, sizeof(*cdir));
+                mark_buffer_dirty(bh);
+                brelse(bh);
+                inode_dec_link_count(dentry->d_inode);
+                mark_inode_dirty(dentry->d_inode);
+#if 0
+                if (dentry->d_inode->i_nlink > 1) {
+                    pr_debug("links > 1: %d, not deleting inode\n", dentry->d_inode->i_nlink);
+                    set_nlink(dentry->d_inode, dentry->d_inode->i_nlink-1);
+                    cofs_iput(dentry->d_inode);
+                } else {
+                    pr_debug("links %d, deleting\n", dentry->d_inode->i_nlink);
+                    cofs_inode_delete(dentry->d_inode);
+                }
+#endif
+                return 0;
+            }
+            cdir++;
+        }
+        brelse(bh);
+    }
+    return -1;
+}
+
+#if 0
 int cofs_symlink(struct inode * dir, struct dentry *dentry, const char * symname)
 {
     pr_debug("cofs: cofs_symlink\n");
     return -ENOSPC;
 }
+#endif
+
 
 struct inode_operations cofs_dir_inode_ops = {
     .lookup         = cofs_lookup,
-    //.link           = simple_link,
-    //.unlink         = simple_unlink,
-    //.symlink        = cofs_symlink,
     .mknod          = cofs_mknod,
     .mkdir          = cofs_mkdir,
     .create         = cofs_create,
+    .unlink         = cofs_unlink,
+    //.link           = simple_link,
+    //.symlink        = cofs_symlink,
     //.rmdir          = simple_rmdir,
     //.rename         = simple_rename,
 };

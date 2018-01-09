@@ -1,5 +1,6 @@
 #include <linux/buffer_head.h>
 #include "cofs_common.h"
+#include "block.h"
 
 extern struct inode_operations cofs_dir_inode_ops;
 extern struct file_operations cofs_dir_operations;
@@ -45,6 +46,8 @@ void cofs_iput(struct inode *inode)
     bh = sb_bread(inode->i_sb, block_no);
     dino = (cofs_inode_t *) bh->b_data + inode->i_ino % NUM_INOPB;
     dino->type = inode->i_mode & S_IFMT; // not very sure...
+    pr_debug("cofs_iput: inode: %lu, mode: %u, ino mode: %u\n", 
+            inode->i_ino, dino->type, inode->i_mode);
     dino->uid = inode->i_uid.val;
     dino->gid = inode->i_gid.val;
     dino->num_links = inode->i_nlink;
@@ -80,7 +83,7 @@ struct inode *cofs_iget(struct super_block *sb, unsigned long ino)
             ino, dino->size, dino->type, dino->num_links);
     
     // assign to inode from raw //
-    inode->i_mode = dino->type | 0555;
+    inode->i_mode = dino->type;
     inode->i_size = dino->size;
     i_uid_write(inode, dino->uid);
 	i_gid_write(inode, dino->gid);
@@ -142,4 +145,92 @@ struct inode *cofs_inode_alloc(struct super_block *sb, unsigned short int type)
     }
     pr_debug("cofs: inode_alloc - no free inodes!\n");
     return NULL;
+}
+
+static int cofs_truncate(struct inode *inode, unsigned int length)
+{
+    unsigned int fbn, fbs, fbe; // file block num, start, end
+    unsigned int *blocks, sidx, didx, rel_b, pblock;
+    struct buffer_head *buf, *dino_buf = NULL;
+    struct super_block *sb = inode->i_sb;
+    cofs_inode_t *dino;
+    
+    pr_debug("truncating inode %lu to %u length\n", inode->i_ino, length);
+    if (length > inode->i_size) {
+        return -1;
+    }
+    fbs = length / COFS_BLOCK_SIZE;
+    fbe = (inode->i_size / COFS_BLOCK_SIZE) + 1;
+    dino = cofs_raw_inode(inode->i_sb, inode->i_ino, dino_buf);
+
+    for (fbn = fbs; fbn < fbe; fbn++) {
+        if (fbn < NUM_DIRECT) {
+            if (dino->addrs[fbn]) {
+                cofs_block_free(sb, dino->addrs[fbn]);
+                dino->addrs[fbn] = 0;
+            }
+        } else if (fbn < NUM_DIRECT + NUM_SIND) {
+            buf = sb_bread(sb, dino->addrs[SIND_IDX]);
+            blocks = (unsigned int *) buf->b_data;
+            sidx = fbn - NUM_DIRECT;
+            cofs_block_free(sb, blocks[sidx]);
+            blocks[sidx] = 0;
+            mark_buffer_dirty(buf);
+            brelse(buf);
+            if (cofs_scan_block(sb, dino->addrs[SIND_IDX]) == 0) {
+                cofs_block_free(sb, dino->addrs[SIND_IDX]);
+                dino->addrs[SIND_IDX] = 0;
+            }
+        } else if (fbn < MAX_FILE_SIZE) {
+            rel_b = fbn - NUM_DIRECT - NUM_SIND;
+            sidx = fbn / NUM_EINB;
+            didx = fbn % NUM_EINB;
+
+            buf = sb_bread(sb, dino->addrs[DIND_IDX]);
+            blocks = (unsigned int *) buf->b_data;
+            pblock = blocks[sidx];
+            brelse(buf);
+            
+            buf = sb_bread(sb, pblock);
+            blocks = (unsigned int *) buf->b_data;
+            cofs_block_free(sb, blocks[didx]);
+            blocks[didx] = 0;
+            mark_buffer_dirty(buf);
+            brelse(buf);
+
+            if (cofs_scan_block(sb, pblock) == 0) {
+                cofs_block_free(sb, pblock);
+                buf = sb_bread(sb, dino->addrs[DIND_IDX]);
+                blocks = (unsigned int *) buf->b_data;
+                blocks[sidx] = 0;
+                mark_buffer_dirty(buf);
+                brelse(buf);
+            }
+
+            if (cofs_scan_block(sb, dino->addrs[DIND_IDX]) == 0) {
+                cofs_block_free(sb, dino->addrs[DIND_IDX]);
+                dino->addrs[DIND_IDX] = 0;
+            }
+        }
+    }
+    inode->i_size = length;
+    cofs_iput(inode);
+    return 0;
+}
+
+void cofs_inode_evict(struct inode *inode) 
+{
+    truncate_inode_pages_final(&inode->i_data);
+    clear_inode(inode);
+    pr_debug("cofs_inode_evict called for inode: %lu\n", inode->i_ino); 
+    if (inode->i_nlink) {
+        return;
+    }
+    // if this node has no more links to it, delete it //
+    pr_debug("cofs_inode_evict: deleting from disk inode: %lu, size: %llu, links: %u\n",
+            inode->i_ino, inode->i_size, inode->i_nlink);
+
+    inode->i_mode = 0;
+    cofs_truncate(inode, 0);
+    //cofs_iput(inode);
 }

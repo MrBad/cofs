@@ -1,6 +1,7 @@
 + fix double indirect
 + add number of links / increment on linking
-- add unlink and truncate and free blocks
++ add unlink and truncate and free blocks - some errors when deleting and creating same file
 - fix files mode
+- write/rewrite mkcofs that only will create the file system
 - add triple indirect tables, so we break the 8MB limit of the file
 
