@@ -6,11 +6,13 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <libgen.h>
+#include <linux/fs.h>
 
 #include "cofs_common.h"
 
@@ -219,10 +221,20 @@ int main(int argc, char *argv[])
 	}
 	if (fstat(fd, &st) < 0) {
 		printf("Cannot stat %s\n", argv[1]);
+		close(fd);
 		return 1;
 	}
-
-	cofs_size = st.st_size / COFS_BLOCK_SIZE;
+    if (S_ISREG(st.st_mode)) {
+    	cofs_size = st.st_size / COFS_BLOCK_SIZE;
+    } else if (S_ISBLK(st.st_mode)) {
+        uint64_t size;
+        if (ioctl(fd, BLKGETSIZE64,&size) == -1) {
+            perror("size");
+            close(fd);
+            return 1;
+        }
+        cofs_size = size / COFS_BLOCK_SIZE;
+    }
 	cofs_size -= PARTITION_OFFSET;
 	// assuming one file has ~4096 bytes, 1 inode per file //
 	num_inodes = cofs_size * COFS_BLOCK_SIZE / 4096; 

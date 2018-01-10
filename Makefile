@@ -7,7 +7,7 @@ CFLAGS_block.o :=-DDEBUG
 CFLAGS_dir.o :=-DDEBUG
 
 MYFLAGS = -g -Wall -Wextra -std=c99 -pedantic
-
+CFLAGS =
 all: mkfs
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
